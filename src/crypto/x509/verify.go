@@ -47,7 +47,7 @@ const (
 	// name constraints, but leaf certificate contains a name of an
 	// unsupported or unconstrained type.
 	UnconstrainedName
-	// TooManyConstraints results when the number of comparision operations
+	// TooManyConstraints results when the number of comparison operations
 	// needed to check a certificate exceeds the limit set by
 	// VerifyOptions.MaxConstraintComparisions. This limit exists to
 	// prevent pathological certificates can consuming excessive amounts of
@@ -185,7 +185,7 @@ type VerifyOptions struct {
 	KeyUsages []ExtKeyUsage
 	// MaxConstraintComparisions is the maximum number of comparisons to
 	// perform when checking a given certificate's name constraints. If
-	// zero, a sensible default is used. This limit prevents pathalogical
+	// zero, a sensible default is used. This limit prevents pathological
 	// certificates from consuming excessive amounts of CPU time when
 	// validating.
 	MaxConstraintComparisions int
@@ -781,7 +781,17 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 // If opts.Roots is nil and system roots are unavailable the returned error
 // will be of type SystemRootsError.
 //
-// WARNING: this doesn't do any revocation checking.
+// Name constraints in the intermediates will be applied to all names claimed
+// in the chain, not just opts.DNSName. Thus it is invalid for a leaf to claim
+// example.com if an intermediate doesn't permit it, even if example.com is not
+// the name being validated. Note that DirectoryName constraints are not
+// supported.
+//
+// Extended Key Usage values are enforced down a chain, so an intermediate or
+// root that enumerates EKUs prevents a leaf from asserting an EKU not in that
+// list.
+//
+// WARNING: this function doesn't do any revocation checking.
 func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err error) {
 	// Platform-specific verification needs the ASN.1 contents so
 	// this makes the behavior consistent across platforms.

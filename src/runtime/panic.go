@@ -408,12 +408,15 @@ func preprintpanics(p *_panic) {
 }
 
 // Print all currently active panics. Used when crashing.
+// Should only be called after preprintpanics.
 func printpanics(p *_panic) {
 	if p.link != nil {
 		printpanics(p.link)
 		print("\t")
 	}
 	print("panic: ")
+	// Because of preprintpanics, p.arg cannot be an error or
+	// stringer, so this won't call into user code.
 	printany(p.arg)
 	if p.recovered {
 		print(" [recovered]")
@@ -654,7 +657,7 @@ func recovery(gp *g) {
 	gogo(&gp.sched)
 }
 
-// startpanic_m implements unrecoverable panic.
+// startpanic_m prepares for an unrecoverable panic.
 //
 // It can have write barriers because the write barrier explicitly
 // ignores writes once dying > 0.
@@ -664,10 +667,12 @@ func startpanic_m() {
 	_g_ := getg()
 	if mheap_.cachealloc.size == 0 { // very early
 		print("runtime: panic before malloc heap initialized\n")
-		_g_.m.mallocing = 1 // tell rest of panic not to try to malloc
-	} else if _g_.m.mcache == nil { // can happen if called from signal handler or throw
-		_g_.m.mcache = allocmcache()
 	}
+	// Disallow malloc during an unrecoverable panic. A panic
+	// could happen in a signal handler, or in a throw, or inside
+	// malloc itself. We want to catch if an allocation ever does
+	// happen (even if we're not in one of these situations).
+	_g_.m.mallocing++
 
 	switch _g_.m.dying {
 	case 0:
@@ -752,6 +757,9 @@ func dopanic_m(gp *g, pc, sp uintptr) {
 	exit(2)
 }
 
+// canpanic returns false if a signal should throw instead of
+// panicking.
+//
 //go:nosplit
 func canpanic(gp *g) bool {
 	// Note that g is m->gsignal, different from gp.
@@ -776,5 +784,43 @@ func canpanic(gp *g) bool {
 	if GOOS == "windows" && _m_.libcallsp != 0 {
 		return false
 	}
+	return true
+}
+
+// shouldPushSigpanic returns true if pc should be used as sigpanic's
+// return PC (pushing a frame for the call). Otherwise, it should be
+// left alone so that LR is used as sigpanic's return PC, effectively
+// replacing the top-most frame with sigpanic. This is used by
+// preparePanic.
+func shouldPushSigpanic(gp *g, pc, lr uintptr) bool {
+	if pc == 0 {
+		// Probably a call to a nil func. The old LR is more
+		// useful in the stack trace. Not pushing the frame
+		// will make the trace look like a call to sigpanic
+		// instead. (Otherwise the trace will end at sigpanic
+		// and we won't get to see who faulted.)
+		return false
+	}
+	// If we don't recognize the PC as code, but we do recognize
+	// the link register as code, then this assumes the panic was
+	// caused by a call to non-code. In this case, we want to
+	// ignore this call to make unwinding show the context.
+	//
+	// If we running C code, we're not going to recognize pc as a
+	// Go function, so just assume it's good. Otherwise, traceback
+	// may try to read a stale LR that looks like a Go code
+	// pointer and wander into the woods.
+	if gp.m.incgo || findfunc(pc).valid() {
+		// This wasn't a bad call, so use PC as sigpanic's
+		// return PC.
+		return true
+	}
+	if findfunc(lr).valid() {
+		// This was a bad call, but the LR is good, so use the
+		// LR as sigpanic's return PC.
+		return false
+	}
+	// Neither the PC or LR is good. Hopefully pushing a frame
+	// will work.
 	return true
 }

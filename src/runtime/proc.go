@@ -2299,6 +2299,12 @@ stop:
 		return gp, false
 	}
 
+	// Before we drop our P, make a snapshot of the allp slice,
+	// which can change underfoot once we no longer block
+	// safe-points. We don't need to snapshot the contents because
+	// everything up to cap(allp) is immutable.
+	allpSnapshot := allp
+
 	// return P and block
 	lock(&sched.lock)
 	if sched.gcwaiting != 0 || _p_.runSafePointFn != 0 {
@@ -2338,7 +2344,7 @@ stop:
 	}
 
 	// check all runqueues once again
-	for _, _p_ := range allp {
+	for _, _p_ := range allpSnapshot {
 		if !runqempty(_p_) {
 			lock(&sched.lock)
 			_p_ = pidleget()
@@ -2818,10 +2824,6 @@ func reentersyscall(pc, sp uintptr) {
 		save(pc, sp)
 	}
 
-	// Goroutines must not split stacks in Gsyscall status (it would corrupt g->sched).
-	// We set _StackGuard to StackPreempt so that first split stack check calls morestack.
-	// Morestack detects this case and throws.
-	_g_.stackguard0 = stackPreempt
 	_g_.m.locks--
 }
 

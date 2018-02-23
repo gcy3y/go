@@ -1759,8 +1759,6 @@ func genwrapper(rcvr *types.Type, method *types.Field, newnam *types.Sym, iface 
 		as.Right.Type = rcvr
 		fn.Nbody.Append(as)
 		fn.Nbody.Append(nodSym(ORETJMP, nil, methodsym(method.Sym, methodrcvr, false)))
-		// When tail-calling, we can't use a frame pointer.
-		fn.Func.SetNoFramePointer(true)
 	} else {
 		fn.Func.SetWrapper(true) // ignore frame for panic+recover matching
 		call := nod(OCALL, dot, nil)
@@ -1805,13 +1803,13 @@ func hashmem(t *types.Type) *Node {
 
 	n := newname(sym)
 	n.SetClass(PFUNC)
-	tfn := nod(OTFUNC, nil, nil)
-	tfn.List.Append(anonfield(types.NewPtr(t)))
-	tfn.List.Append(anonfield(types.Types[TUINTPTR]))
-	tfn.List.Append(anonfield(types.Types[TUINTPTR]))
-	tfn.Rlist.Append(anonfield(types.Types[TUINTPTR]))
-	tfn = typecheck(tfn, Etype)
-	n.Type = tfn.Type
+	n.Type = functype(nil, []*Node{
+		anonfield(types.NewPtr(t)),
+		anonfield(types.Types[TUINTPTR]),
+		anonfield(types.Types[TUINTPTR]),
+	}, []*Node{
+		anonfield(types.Types[TUINTPTR]),
+	})
 	return n
 }
 
@@ -1974,6 +1972,11 @@ func addinit(n *Node, init []*Node) *Node {
 	return n
 }
 
+// The linker uses the magic symbol prefixes "go." and "type."
+// Avoid potential confusion between import paths and symbols
+// by rejecting these reserved imports for now. Also, people
+// "can do weird things in GOPATH and we'd prefer they didn't
+// do _that_ weird thing" (per rsc). See also #4257.
 var reservedimports = []string{
 	"go",
 	"type",
